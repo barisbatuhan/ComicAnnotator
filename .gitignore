@@ -1,0 +1,12 @@
+annot_images/*
+meta_data/*
+
+__pycache__
+*/__pycache__
+**/__pycache__
+*/**/__pycache__
+
+.ipynb_checkpoints
+*/.ipynb_checkpoints
+**/.ipynb_checkpoints
+*/**/.ipynb_checkpoints
