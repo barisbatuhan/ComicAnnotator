@@ -191,8 +191,32 @@ def pass_current_image():
 def set_next_image(*args):
     global files_list, state, confirmed_assocs, assoc_list, click_start
     
+    if len(assoc_list) > 0:
+        confirmed_assocs.append(assoc_list)
+        assoc_list = []
+
     last_file = files_list[0]
     files_list = files_list[1:]
+
+    if len(boxes) > 0:
+        f = open(os.path.join('results/', last_file[:last_file.rfind(".")] + ".txt"), "w")
+        f.write("### BOXES\n")
+
+        color_map = {}
+        for k in colors.keys():
+            color_map[colors[k]] = k
+
+        for idx, (box, (x1, y1, x2, y2)) in enumerate(zip(boxes, boxes_coords)):
+            color = canvas.itemcget(box, "outline")
+            f.write(f"{idx},{x1},{y1},{x2},{y2},{color_map[color]}\n")
+            # TODO: instead of this, normalize the coordinated w.r.t. the image boundaries
+            #       and correct them according to the original image size
+        
+        f.write("\n### ASSOCIATIONS\n")
+        for lines in confirmed_assocs:
+            txt = "".join([str(idx) + "," for idx in lines])
+            f.write(txt[:-1] + "\n")
+
     
     if len(files_list) < 1:
         finish_screen()
@@ -203,9 +227,6 @@ def set_next_image(*args):
         confirmed_assocs   = []
         assoc_list         = []
         click_start        = [-1, -1]
-
-    
-    # TODO: deal with annotations given by users
 
 
 def set_state(event):
