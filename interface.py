@@ -8,8 +8,35 @@ from PIL import Image, ImageTk
 
 from tkinter import *
 
+class States(Enum):
+    BOX   = 1
+    ASSOC = 2
+    CLASS = 3
+    EDIT  = 4
+    TL_RESIZE_EDIT = 5
+    TR_RESIZE_EDIT = 6
+    BL_RESIZE_EDIT = 7
+    BR_RESIZE_EDIT = 8
+    SHIFT_EDIT     = 9
 
-width, height      = 1000, 1000
+def get_state_lbl():
+    global state
+
+    if state == States.BOX:
+        return "Mode: DRAW BOXES"
+    elif state == States.ASSOC:
+        return "Mode: ASSOCIATE"
+    elif state == States.EDIT:
+        return "Mode: EDIT BOXES"
+
+
+class Acts(Enum):
+    BOX  = 1
+    LINE = 2
+    INIT = 3
+    FINISH = 4
+
+state              = States.BOX
 img_range          = [-1, -1]
 files_list         = None
 boxes              = []
@@ -24,19 +51,7 @@ circle_r           = 5
 edit_type          = None
 editbox_idx        = None
 
-
-class States(Enum):
-    BOX   = 1
-    ASSOC = 2
-    CLASS = 3
-    EDIT  = 4
-    TL_RESIZE_EDIT = 5
-    TR_RESIZE_EDIT = 6
-    BL_RESIZE_EDIT = 7
-    BR_RESIZE_EDIT = 8
-    SHIFT_EDIT  = 9
-
-state       = States.BOX
+last_actions        = [Acts.INIT]
 
 # GLOBAL OBJECTS
 
@@ -69,7 +84,7 @@ welcome = {
     "container": None,
 }
 
-association = {
+annotation = {
     "next_btn": None,
     "pass_btn": None,
     "curr_img": None,
@@ -80,7 +95,10 @@ association = {
     "body_btn": None,
     "tail_btn": None,
     "container": None,
-    "separator": None
+    "separator": None,
+    "undo_btn": None,
+    "clear_btn": None,
+    "state_lbl": None
 }
 
 colors = {
@@ -96,7 +114,7 @@ finish = {
     "container": None
 }
 
-scenes = [welcome, association, finish]
+scenes = [welcome, annotation, finish]
 
 
 def disable_screen_objs():
@@ -109,6 +127,9 @@ def disable_screen_objs():
     delete_boxes()
     delete_circles()
     delete_lines()
+
+def close_app(*args):
+    root.destroy()
 
 
 def read_users_list():
@@ -141,7 +162,7 @@ def set_related_files():
 
 
 def show_image():
-    global ratio, files_list, association, canvas
+    global ratio, files_list, annotation, canvas
     
     filepath = f'annot_images/{files_list[0]}'
     img = PIL.Image.open(filepath)
@@ -155,10 +176,10 @@ def show_image():
         ratio = scr_h / h
     
     img = img.resize((img_w, img_h))
-    association["curr_img"] = ImageTk.PhotoImage(img)
+    annotation["curr_img"] = ImageTk.PhotoImage(img)
     
     canvas.create_image(
-        scr_w//2, scr_h//2, image=association["curr_img"], anchor=CENTER)
+        scr_w//2, scr_h//2, image=annotation["curr_img"], anchor=CENTER)
 
 
 def pass_current_image():
@@ -167,8 +188,8 @@ def pass_current_image():
     show_image()
 
 
-def set_next_image():
-    global files_list, state
+def set_next_image(*args):
+    global files_list, state, confirmed_assocs, assoc_list, click_start
     
     last_file = files_list[0]
     files_list = files_list[1:]
@@ -176,9 +197,7 @@ def set_next_image():
     if len(files_list) < 1:
         finish_screen()
     else:
-        delete_boxes()
-        delete_circles()
-        delete_lines()
+        clear_canvas()
         show_image()
         state = States.BOX
         confirmed_assocs   = []
@@ -190,7 +209,7 @@ def set_next_image():
 
 
 def set_state(event):
-    global state, assoc_list
+    global state, assoc_list, annotation
 
     if event.char in ['b', 'B']:
         state = States.BOX
@@ -220,17 +239,78 @@ def set_state(event):
         else:
             assoc_list = []
     else:
-        print("[WARNING] Wrong key is pressed for the state!")
+        print(f"[WARNING] Wrong key is pressed for the state: {event.char}!")
     
     if state != States.EDIT:
         delete_circles()
+    
+    if annotation["state_lbl"] is not None:
+        annotation["state_lbl"]['text'] = get_state_lbl()
+
 
 #############################################################################
-### ASSOCIATION MODE METHODS
+### UNDO AND DELETE MODE METHODS
+#############################################################################
+
+
+# if box is drawn:
+#   - boxes, boxes coords, box corners should be updated
+# if association is drawn:
+#   - assoc list is updated if not empty
+#   - assoc lines is updated for that purpose
+#   - confirmed assocs should be updated if assoc list is empty
+
+def undo_changes(*args):
+
+    global last_actions, boxes, box_corners, boxes_coords, assoc_list, assoc_lines, confirmed_assocs
+
+    if len(last_actions) > 0:
+        last_action = last_actions.pop()
+
+        if last_action == Acts.INIT or last_action == Acts.FINISH:
+            # add initial/final state again and do nothing
+            last_actions.append(last_action)
+        
+        elif last_action == Acts.BOX and len(boxes) > 0:
+            canvas.delete(boxes[-1])
+            boxes = boxes[:-1]
+            boxes_coords = boxes_coords[:-1]
+            if len(box_corners) > 0:
+                for circle in box_corners[-1]:
+                    canvas.delete(circle)
+                box_corners = box_corners[:-1]
+        
+        elif last_action == Acts.LINE:
+            # if there is a current association going on,
+            # one last line is deleted
+            if len(assoc_list) == 1:
+                assoc_list = []
+            elif len(assoc_list) > 1:
+                assoc_list = assoc_list[:-1]
+                canvas.delete(assoc_lines[-1])
+                assoc_lines = assoc_lines[:-1]
+            # if an entire association is finished, entire is undone
+            elif len(confirmed_assocs) > 0:
+                last_assoc = confirmed_assocs[-1]
+                assoc_list = last_assoc
+                confirmed_assocs = confirmed_assocs[:-1]
+                last_actions.append(last_action)
+                undo_changes()
+
+
+def clear_canvas(*args):
+    global last_actions
+    if last_actions[-1] not in [Acts.INIT, Acts.FINISH]:
+        delete_boxes()
+        delete_circles()
+        delete_lines()  
+
+#############################################################################
+### ANNOTATION MODE METHODS
 #############################################################################
 
 def assoc_add(event):
-    global boxes_coords, assoc_list, canvas
+    global boxes_coords, assoc_list, canvas, last_actions
     x, y = event.x, event.y
     
     box_info = [-1, 10000000000] # idx, area
@@ -252,6 +332,8 @@ def assoc_add(event):
             ax2, ay2 = (x1 + x2) // 2, (y1 + y2) // 2
             assoc_lines.append(
                 canvas.create_line(ax1, ay1, ax2, ay2, fill="red", width=3))
+    
+    last_actions.append(Acts.LINE)
 
 
 def assoc_finalize():
@@ -401,7 +483,7 @@ def create_box(event):
     if active_obj is not None:
         boxes.append(
             canvas.create_rectangle(event.x, event.y, event.x+1, event.y+1, 
-            outline=colors[active_obj], fill="", width=5)
+            outline=colors[active_obj], fill="", width=3)
         )
 
 def delete_boxes():
@@ -421,14 +503,14 @@ def edit_box(event):
 def change_box_color(typ):
     global active_obj
     if active_obj is not None:
-        association[active_obj + "_btn"].config(font=("Courier", 14))
+        annotation[active_obj + "_btn"].config(font=("Courier", 14))
     active_obj = typ
-    association[active_obj + "_btn"].config(font=("Courier", 14, "bold", "underline"))
+    annotation[active_obj + "_btn"].config(font=("Courier", 14, "bold", "underline"))
 
 
 
 def finish_box(event):
-    global boxes, canvas, click_start, boxes_coords, active_obj
+    global boxes, canvas, click_start, boxes_coords, active_obj, last_actions
     
     if active_obj is not None:
         canvas.coords(boxes[-1], *click_start, event.x, event.y)
@@ -437,82 +519,101 @@ def finish_box(event):
         x, y, x1, y1 = event.x, event.y, *click_start
         final_coords = [min(x, x1), min(y, y1), max(x, x1), max(y, y1)]
         boxes_coords.append(final_coords)
+        last_actions.append(Acts.BOX)
         click_start = [-1, -1]
         # TODO: save box and create a class selection screen
 
 #############################################################################
 
 def annot_screen():
-    global canvas, association
+    global canvas, annotation
 
     disable_screen_objs()
     set_related_files()
 
     root.bind("<Key>", set_state)
+    root.bind("<Delete>", clear_canvas)
+    root.bind("<Control-z>", undo_changes)
+    root.bind("<Right>", set_next_image)
     canvas.bind("<ButtonPress-1>", create_box)
     canvas.bind("<B1-Motion>", edit_box)
     canvas.bind("<ButtonRelease-1>", finish_box)
 
-    association["container"] = Label(
+    annotation["container"] = Label(
         root, font=("Courier", 14), text="""Shortcuts / Modes:
 ------------------------------------------
 * B --> bounding box draw mode
 * E --> box edit mode
-* A --> face-body-bubble association mode
-* N --> before doing next association""")
-    association["container"].config(bg="#b8e5eb", padx=10, pady=10, justify=LEFT)
-    association["container"].place(relx=0.01, rely=0.01, anchor="nw")
+* A --> face-body-bubble annotation mode
+* N --> before doing next annotation""")
+    annotation["container"].config(bg="#b8e5eb", padx=10, pady=10, justify=LEFT)
+    annotation["container"].place(relx=0.01, rely=0.01, anchor="nw")
 
-    association["next_btn"] = Button(
-        root, text="NEXT IMAGE", font=("Courier", 14), width=15, 
+    annotation["state_lbl"] = Label(root, font=("Courier", 14, "bold"), text=get_state_lbl())
+    annotation["state_lbl"].config(bg="#b8e5eb", padx=10, pady=6, justify=LEFT)
+    annotation["state_lbl"].place(relx=0.97, rely=0.01, anchor="ne")
+
+    annotation["next_btn"] = Button(
+        root, text="NEXT IMG [->]", font=("Courier", 14), width=15, 
         fg="#121111", bg= "gray", command=set_next_image)
-    association["next_btn"].place(relx=0.03, rely=0.17, anchor="nw")
+    annotation["next_btn"].place(relx=0.03, rely=0.17, anchor="nw")
 
-    association["pass_btn"] = Button(
+    annotation["pass_btn"] = Button(
         root, text="PASS", font=("Courier", 14), width=15, 
         fg="#121111", bg= "gray", command=pass_current_image)
-    association["pass_btn"].place(relx=0.15, rely=0.17, anchor="nw")
+    annotation["pass_btn"].place(relx=0.15, rely=0.17, anchor="nw")
 
-    association["separator"] = Label(
+    annotation["undo_btn"] = Button(
+        root, text="UNDO [Ctrl+Z]", font=("Courier", 14), width=15, 
+        fg="#121111", bg= "light gray", command=undo_changes)
+    annotation["undo_btn"].place(relx=0.03, rely=0.22, anchor="nw")
+
+    annotation["clear_btn"] = Button(
+        root, text="CLEAR [DEL]", font=("Courier", 14), width=15, 
+        fg="#121111", bg= "light gray", command=clear_canvas)
+    annotation["clear_btn"].place(relx=0.15, rely=0.22, anchor="nw")
+
+    annotation["separator"] = Label(
         root, font=("Courier", 14), text="------------------------------------------")
-    association["separator"].config(bg="white", padx=10, pady=10, justify=LEFT)
-    association["separator"].place(relx=0.01, rely=0.22, anchor="nw")
+    annotation["separator"].config(bg="white", padx=10, pady=10, justify=LEFT)
+    annotation["separator"].place(relx=0.01, rely=0.27, anchor="nw")
 
-    association["face_btn"] = Button(
+    annotation["face_btn"] = Button(
         root, text="FACE", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["face"], command=lambda: change_box_color("face"))
-    association["face_btn"].place(relx=0.03, rely=0.27, anchor="nw")
+    annotation["face_btn"].place(relx=0.03, rely=0.32, anchor="nw")
     
-    association["body_btn"] = Button(
+    annotation["body_btn"] = Button(
         root, text="BODY", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["body"], command=lambda: change_box_color("body"))
-    association["body_btn"].place(relx=0.15, rely=0.27, anchor="nw")
+    annotation["body_btn"].place(relx=0.15, rely=0.32, anchor="nw")
 
-    association["panel_btn"] = Button(
+    annotation["panel_btn"] = Button(
         root, text="PANEL", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["panel"], command=lambda: change_box_color("panel"))
-    association["panel_btn"].place(relx=0.03, rely=0.32, anchor="nw")
+    annotation["panel_btn"].place(relx=0.03, rely=0.37, anchor="nw")
 
-    association["narrative_btn"] = Button(
+    annotation["narrative_btn"] = Button(
         root, text="NARRATIVE", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["narrative"], command=lambda: change_box_color("narrative"))
-    association["narrative_btn"].place(relx=0.15, rely=0.32, anchor="nw")
+    annotation["narrative_btn"].place(relx=0.15, rely=0.37, anchor="nw")
 
-    association["bubble_btn"] = Button(
+    annotation["bubble_btn"] = Button(
         root, text="SPEECH BALLOON", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["bubble"], command=lambda: change_box_color("bubble"))
-    association["bubble_btn"].place(relx=0.03, rely=0.37, anchor="nw")
+    annotation["bubble_btn"].place(relx=0.03, rely=0.42, anchor="nw")
 
-    association["tail_btn"] = Button(
+    annotation["tail_btn"] = Button(
         root, text="BALLOON TAIL", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["tail"], command=lambda: change_box_color("tail"))
-    association["tail_btn"].place(relx=0.15, rely=0.37, anchor="nw")
-
+    annotation["tail_btn"].place(relx=0.15, rely=0.42, anchor="nw")
 
     show_image() 
 
 
 def welcome_screen():
+
+    root.bind("<Escape>", close_app)
 
     welcome["container"] = Label(root, text="")
     welcome["container"].config(bg="#b8e5eb", padx=200, pady=80)
@@ -536,7 +637,16 @@ def welcome_screen():
     welcome["btn"].place(relx=0.5, rely=0.7, anchor="center")
 
 def finish_screen():
+    
+    global finish, last_actions, canvas
+
+    root.unbind("<Delete>")
+    root.unbind("<Control-z>")
+    root.unbind("<Right>")
+
     disable_screen_objs()
+
+    last_actions.append(Acts.FINISH)
     canvas.delete("all")
 
     finish["container"] = Label(root, text="")
