@@ -62,7 +62,9 @@ curr_ident_color   = None
 ident_dots         = []
 ident_box_indices  = []
 
-last_actions        = [Acts.INIT]
+last_actions       = [Acts.INIT]
+
+inst_end_val       = 0.20
 
 # GLOBAL OBJECTS
 
@@ -284,7 +286,7 @@ def set_next_image(*args):
 def set_state(event):
     global state, assoc_list, annotation
 
-    if state == States.IDENT and event.char not in ["i", "I", "N", "n", "ı", "İ"]:
+    if state == States.IDENT and event.char not in ["i", "I", "N", "n"]:
         exit_identity_mode()
 
     if event.char in ['b', 'B']:
@@ -320,7 +322,7 @@ def set_state(event):
         elif state.IDENT:
             new_identity()
     
-    elif event.char not in ["i", "I"]:
+    elif event.char in ["i", "I"]:
         enter_identity_mode()
         state = States.IDENT
         canvas.bind("<ButtonPress-1>", add_identity)
@@ -698,7 +700,7 @@ def finish_box(event):
 #############################################################################
 
 def annot_screen():
-    global canvas, annotation
+    global canvas, annotation, inst_end_val
 
     disable_screen_objs()
     set_related_files()
@@ -716,8 +718,9 @@ def annot_screen():
 ------------------------------------------
 * B --> bounding box draw mode
 * E --> box edit mode
-* A --> face-body-bubble annotation mode
-* N --> before doing next annotation""")
+* A --> face-body-bubble association mode
+* I --> identification through body matching
+* N --> go next association / identification""")
     annotation["container"].config(bg="#b8e5eb", padx=10, pady=10, justify=LEFT)
     annotation["container"].place(relx=0.01, rely=0.01, anchor="nw")
 
@@ -728,57 +731,57 @@ def annot_screen():
     annotation["next_btn"] = Button(
         root, text="NEXT IMG [->]", font=("Courier", 14), width=15, 
         fg="#121111", bg= "gray", command=set_next_image)
-    annotation["next_btn"].place(relx=0.03, rely=0.17, anchor="nw")
+    annotation["next_btn"].place(relx=0.03, rely=inst_end_val, anchor="nw")
 
     annotation["pass_btn"] = Button(
         root, text="PASS", font=("Courier", 14), width=15, 
         fg="#121111", bg= "gray", command=pass_current_image)
-    annotation["pass_btn"].place(relx=0.15, rely=0.17, anchor="nw")
+    annotation["pass_btn"].place(relx=0.15, rely=inst_end_val, anchor="nw")
 
     annotation["undo_btn"] = Button(
         root, text="UNDO [Ctrl+Z]", font=("Courier", 14), width=15, 
         fg="#121111", bg= "light gray", command=undo_changes)
-    annotation["undo_btn"].place(relx=0.03, rely=0.22, anchor="nw")
+    annotation["undo_btn"].place(relx=0.03, rely=inst_end_val + 0.05, anchor="nw")
 
     annotation["clear_btn"] = Button(
         root, text="CLEAR [DEL]", font=("Courier", 14), width=15, 
         fg="#121111", bg= "light gray", command=clear_canvas)
-    annotation["clear_btn"].place(relx=0.15, rely=0.22, anchor="nw")
+    annotation["clear_btn"].place(relx=0.15, rely=inst_end_val + 0.05, anchor="nw")
 
     annotation["separator"] = Label(
         root, font=("Courier", 14), text="------------------------------------------")
     annotation["separator"].config(bg="white", padx=10, pady=10, justify=LEFT)
-    annotation["separator"].place(relx=0.01, rely=0.27, anchor="nw")
+    annotation["separator"].place(relx=0.01, rely=inst_end_val + 0.1, anchor="nw")
 
     annotation["face_btn"] = Button(
         root, text="FACE", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["face"], command=lambda: change_box_color("face"))
-    annotation["face_btn"].place(relx=0.03, rely=0.32, anchor="nw")
+    annotation["face_btn"].place(relx=0.03, rely=inst_end_val + 0.15, anchor="nw")
     
     annotation["body_btn"] = Button(
         root, text="BODY", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["body"], command=lambda: change_box_color("body"))
-    annotation["body_btn"].place(relx=0.15, rely=0.32, anchor="nw")
+    annotation["body_btn"].place(relx=0.15, rely=inst_end_val + 0.15, anchor="nw")
 
     annotation["panel_btn"] = Button(
         root, text="PANEL", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["panel"], command=lambda: change_box_color("panel"))
-    annotation["panel_btn"].place(relx=0.03, rely=0.37, anchor="nw")
+    annotation["panel_btn"].place(relx=0.03, rely=inst_end_val + 0.2, anchor="nw")
 
     annotation["narrative_btn"] = Button(
         root, text="NARRATIVE", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["narrative"], command=lambda: change_box_color("narrative"))
-    annotation["narrative_btn"].place(relx=0.15, rely=0.37, anchor="nw")
+    annotation["narrative_btn"].place(relx=0.15, rely=inst_end_val + 0.2, anchor="nw")
 
     annotation["bubble_btn"] = Button(
         root, text="SPEECH BALLOON", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["bubble"], command=lambda: change_box_color("bubble"))
-    annotation["bubble_btn"].place(relx=0.03, rely=0.42, anchor="nw")
+    annotation["bubble_btn"].place(relx=0.03, rely=inst_end_val + 0.25, anchor="nw")
 
     annotation["tail_btn"] = Button(
         root, text="BALLOON TAIL", font=("Courier", 14), width=15, 
         fg="#121111", bg= colors["tail"], command=lambda: change_box_color("tail"))
-    annotation["tail_btn"].place(relx=0.15, rely=0.42, anchor="nw")
+    annotation["tail_btn"].place(relx=0.15, rely=inst_end_val + 0.25, anchor="nw")
 
     show_image() 
 
