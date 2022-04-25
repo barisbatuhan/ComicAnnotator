@@ -65,6 +65,7 @@ ident_box_indices  = []
 last_actions       = [Acts.INIT]
 
 inst_end_val       = 0.20
+bar_end_line       = 550
 
 # GLOBAL OBJECTS
 
@@ -109,9 +110,11 @@ annotation = {
     "tail_btn": None,
     "container": None,
     "separator": None,
+    "vert_separator": None,
     "undo_btn": None,
     "clear_btn": None,
-    "state_lbl": None
+    "state_lbl": None,
+    "vert_separator": None,
 }
 
 colors = {
@@ -129,15 +132,14 @@ finish = {
 
 scenes = [welcome, annotation, finish]
 
-def create_rectangle(x1, y1, x2, y2, **kwargs):
-    if 'alpha' in kwargs:
-        alpha = int(kwargs.pop('alpha') * 255)
-        fill = kwargs.pop('fill')
-        fill = root.winfo_rgb(fill) + (alpha,)
-        image = Image.new('RGBA', (x2-x1, y2-y1), fill)
-        canvas.create_image(x1, y1, image=image, anchor='nw')
-    canvas.create_rectangle(x1, y1, x2, y2, **kwargs)
-
+# def create_rectangle(x1, y1, x2, y2, **kwargs):
+#     if 'alpha' in kwargs:
+#         alpha = int(kwargs.pop('alpha') * 255)
+#         fill = kwargs.pop('fill')
+#         fill = root.winfo_rgb(fill) + (alpha,)
+#         image = Image.new('RGBA', (x2-x1, y2-y1), fill)
+#         canvas.create_image(x1, y1, image=image, anchor='nw')
+#     canvas.create_rectangle(x1, y1, x2, y2, **kwargs)
 
 def disable_screen_objs():
     for scene in scenes:
@@ -149,6 +151,8 @@ def disable_screen_objs():
     delete_boxes()
     delete_circles()
     delete_lines()
+    delete_identities()
+
 
 def close_app(*args):
     root.destroy()
@@ -184,7 +188,7 @@ def set_related_files():
 
 
 def show_image():
-    global ratio, files_list, annotation, canvas, img_sizes
+    global ratio, files_list, annotation, canvas, img_sizes, bar_end_line
     
     filepath = f'annot_images/{files_list[0]}'
     img = PIL.Image.open(filepath)
@@ -193,9 +197,11 @@ def show_image():
     img_sizes[0] = w
     img_sizes[1] = h
 
-    if w / h > scr_w / scr_h:
-        img_w, img_h = scr_w, int(h * (scr_w/w))
-        ratio = scr_w / w
+    avail_w = scr_w - bar_end_line - 10
+
+    if w / h > avail_w / scr_h:
+        img_w, img_h = avail_w, int(h * (avail_w/w))
+        ratio = avail_w / w
     else:
         img_w, img_h = int(w * (scr_h/h)), scr_h
         ratio = scr_h / h
@@ -207,7 +213,7 @@ def show_image():
     annotation["curr_img"] = ImageTk.PhotoImage(img)
     
     canvas.create_image(
-        scr_w//2, scr_h//2, image=annotation["curr_img"], anchor=CENTER)
+        10 + bar_end_line + avail_w//2, scr_h//2, image=annotation["curr_img"], anchor=CENTER)
 
 
 def pass_current_image():
@@ -238,9 +244,11 @@ def set_next_image(*args):
         for idx, (box, (x1, y1, x2, y2)) in enumerate(zip(boxes, boxes_coords)):
             color = canvas.itemcget(box, "outline")
 
+            avail_w = scr_w - bar_end_line - 10
+
             res_w, res_h = img_sizes[2], img_sizes[3]
             orig_w, orig_h = img_sizes[0], img_sizes[1]
-            pg_hw, pg_hh = scr_w / 2, scr_h / 2
+            pg_hw, pg_hh = 5 + bar_end_line + avail_w / 2, scr_h / 2
             res_hw, res_hh = res_w / 2, res_h / 2
 
             left_x, top_y = pg_hw - res_hw, pg_hh - res_hh
@@ -251,8 +259,6 @@ def set_next_image(*args):
             y2 = int(min(res_h, y2 - top_y) * orig_h / res_h)
 
             f.write(f"{idx},{x1},{y1},{x2},{y2},{color_map[color]}\n")
-            # TODO: instead of this, normalize the coordinates w.r.t. the image boundaries
-            #       and correct them according to the original image size
         
         f.write("\n### ASSOCIATIONS\n")
         for lines in confirmed_assocs:
@@ -271,7 +277,6 @@ def set_next_image(*args):
             txt = "".join([str(idx) + "," for idx in colors_dict[k]])
             f.write(txt[:-1] + "\n")
 
-    
     if len(files_list) < 1:
         finish_screen()
     else:
@@ -342,14 +347,6 @@ def set_state(event):
 #############################################################################
 ### UNDO AND DELETE MODE METHODS
 #############################################################################
-
-
-# if box is drawn:
-#   - boxes, boxes coords, box corners should be updated
-# if association is drawn:
-#   - assoc list is updated if not empty
-#   - assoc lines is updated for that purpose
-#   - confirmed assocs should be updated if assoc list is empty
 
 def undo_changes(*args):
 
@@ -473,7 +470,6 @@ def add_identity(event):
             
             last_actions.append(Acts.IDENT)
             ident_box_indices.append(idx)
-        
 
 
 #############################################################################
@@ -727,6 +723,9 @@ def annot_screen():
     annotation["state_lbl"] = Label(root, font=("Courier", 14, "bold"), text=get_state_lbl())
     annotation["state_lbl"].config(bg="#b8e5eb", padx=10, pady=6, justify=LEFT)
     annotation["state_lbl"].place(relx=0.97, rely=0.01, anchor="ne")
+
+    print("The width of the label is:", annotation["container"].winfo_width(), "pixels.")
+    annotation["vert_separator"] = canvas.create_line(bar_end_line, 0, bar_end_line, scr_h, width=5)
 
     annotation["next_btn"] = Button(
         root, text="NEXT IMG [->]", font=("Courier", 14), width=15, 
