@@ -13,6 +13,9 @@ class States(Enum):
     ASSOC = 2
     CLASS = 3
     EDIT  = 4
+    IDENT = 10 
+    OCR   = 11 # TO DO
+    GAZE  = 12 # TO DO
     TL_RESIZE_EDIT = 5
     TR_RESIZE_EDIT = 6
     BL_RESIZE_EDIT = 7
@@ -28,20 +31,25 @@ def get_state_lbl():
         return "Mode: ASSOCIATE"
     elif state == States.EDIT:
         return "Mode: EDIT BOXES"
+    elif state == States.IDENT:
+        return "Mode: MATCH BODIES"
 
 
 class Acts(Enum):
-    BOX  = 1
-    LINE = 2
-    INIT = 3
+    BOX    = 1
+    LINE   = 2
+    IDENT  = 5
+    INIT   = 3
     FINISH = 4
 
 state              = States.BOX
 img_range          = [-1, -1]
+img_sizes          = [-1, -1, -1, -1] # orig_w, orig_h, resized_w, resized_h
 files_list         = None
 boxes              = []
-box_corners        = []
 boxes_coords       = []
+boxes_objects      = []
+box_corners        = []
 confirmed_assocs   = []
 assoc_list         = []
 assoc_lines        = []
@@ -50,6 +58,9 @@ click_start        = [-1, -1]
 circle_r           = 5
 edit_type          = None
 editbox_idx        = None
+curr_ident_color   = None
+ident_dots         = []
+ident_box_indices  = []
 
 last_actions        = [Acts.INIT]
 
@@ -103,7 +114,7 @@ annotation = {
 
 colors = {
     "face": "green",
-    "body": "light blue",
+    "body": "blue",
     "panel": "yellow",
     "bubble": "magenta",
     "tail": "pink",
@@ -115,6 +126,15 @@ finish = {
 }
 
 scenes = [welcome, annotation, finish]
+
+def create_rectangle(x1, y1, x2, y2, **kwargs):
+    if 'alpha' in kwargs:
+        alpha = int(kwargs.pop('alpha') * 255)
+        fill = kwargs.pop('fill')
+        fill = root.winfo_rgb(fill) + (alpha,)
+        image = Image.new('RGBA', (x2-x1, y2-y1), fill)
+        canvas.create_image(x1, y1, image=image, anchor='nw')
+    canvas.create_rectangle(x1, y1, x2, y2, **kwargs)
 
 
 def disable_screen_objs():
@@ -162,11 +182,14 @@ def set_related_files():
 
 
 def show_image():
-    global ratio, files_list, annotation, canvas
+    global ratio, files_list, annotation, canvas, img_sizes
     
     filepath = f'annot_images/{files_list[0]}'
     img = PIL.Image.open(filepath)
     w, h = img.size
+
+    img_sizes[0] = w
+    img_sizes[1] = h
 
     if w / h > scr_w / scr_h:
         img_w, img_h = scr_w, int(h * (scr_w/w))
@@ -174,6 +197,9 @@ def show_image():
     else:
         img_w, img_h = int(w * (scr_h/h)), scr_h
         ratio = scr_h / h
+
+    img_sizes[2] = img_w
+    img_sizes[3] = img_h
     
     img = img.resize((img_w, img_h))
     annotation["curr_img"] = ImageTk.PhotoImage(img)
@@ -190,6 +216,7 @@ def pass_current_image():
 
 def set_next_image(*args):
     global files_list, state, confirmed_assocs, assoc_list, click_start
+    global ident_box_indices, ident_dots, img_sizes, scr_w, scr_h
     
     if len(assoc_list) > 0:
         confirmed_assocs.append(assoc_list)
@@ -208,13 +235,38 @@ def set_next_image(*args):
 
         for idx, (box, (x1, y1, x2, y2)) in enumerate(zip(boxes, boxes_coords)):
             color = canvas.itemcget(box, "outline")
+
+            res_w, res_h = img_sizes[2], img_sizes[3]
+            orig_w, orig_h = img_sizes[0], img_sizes[1]
+            pg_hw, pg_hh = scr_w / 2, scr_h / 2
+            res_hw, res_hh = res_w / 2, res_h / 2
+
+            left_x, top_y = pg_hw - res_hw, pg_hh - res_hh
+
+            x1 = int(max(0, x1 - left_x) * orig_w / res_w)
+            x2 = int(min(res_w, x2 - left_x) * orig_w / res_w)
+            y1 = int(max(0, y1 - top_y) * orig_h / res_h)
+            y2 = int(min(res_h, y2 - top_y) * orig_h / res_h)
+
             f.write(f"{idx},{x1},{y1},{x2},{y2},{color_map[color]}\n")
-            # TODO: instead of this, normalize the coordinated w.r.t. the image boundaries
+            # TODO: instead of this, normalize the coordinates w.r.t. the image boundaries
             #       and correct them according to the original image size
         
         f.write("\n### ASSOCIATIONS\n")
         for lines in confirmed_assocs:
             txt = "".join([str(idx) + "," for idx in lines])
+            f.write(txt[:-1] + "\n")
+
+        f.write("\n### IDENTIFICATIONS\n")
+        colors_dict = {}
+        for id_idx, dot in enumerate(ident_dots):
+            color = canvas.itemcget(dot, "fill")
+            if color not in colors_dict.keys():
+                colors_dict[color] = []
+            colors_dict[color].append(ident_box_indices[id_idx])
+
+        for k in colors_dict.keys():
+            txt = "".join([str(idx) + "," for idx in colors_dict[k]])
             f.write(txt[:-1] + "\n")
 
     
@@ -232,11 +284,15 @@ def set_next_image(*args):
 def set_state(event):
     global state, assoc_list, annotation
 
+    if state == States.IDENT and event.char not in ["i", "I", "N", "n", "ı", "İ"]:
+        exit_identity_mode()
+
     if event.char in ['b', 'B']:
         state = States.BOX
         canvas.bind("<ButtonPress-1>", create_box)
         canvas.bind("<B1-Motion>", edit_box)
         canvas.bind("<ButtonRelease-1>", finish_box)
+    
     elif event.char in ['a', 'A']:
         state = States.ASSOC
         canvas.bind("<ButtonPress-1>", assoc_add)
@@ -254,11 +310,23 @@ def set_state(event):
         canvas.bind("<B1-Motion>", edit_continue)
         canvas.bind("<ButtonRelease-1>", edit_end)
         draw_circles()
-    elif state == States.ASSOC and event.char in ['n', 'N']:
-        if len(assoc_list) > 1:
-            assoc_finalize()
-        else:
-            assoc_list = []
+    
+    elif event.char in ['n', 'N']:
+        if state == States.ASSOC:
+            if len(assoc_list) > 1:
+                assoc_finalize()
+            else:
+                assoc_list = []
+        elif state.IDENT:
+            new_identity()
+    
+    elif event.char not in ["i", "I"]:
+        enter_identity_mode()
+        state = States.IDENT
+        canvas.bind("<ButtonPress-1>", add_identity)
+        canvas.unbind("<B1-Motion>")
+        canvas.unbind("<ButtonRelease-1>")
+    
     else:
         print(f"[WARNING] Wrong key is pressed for the state: {event.char}!")
     
@@ -283,7 +351,8 @@ def set_state(event):
 
 def undo_changes(*args):
 
-    global last_actions, boxes, box_corners, boxes_coords, assoc_list, assoc_lines, confirmed_assocs
+    global last_actions, boxes, box_corners, boxes_coords, assoc_list
+    global assoc_lines, confirmed_assocs, boxes_objects, ident_box_indices, ident_dots
 
     if len(last_actions) > 0:
         last_action = last_actions.pop()
@@ -296,6 +365,7 @@ def undo_changes(*args):
             canvas.delete(boxes[-1])
             boxes = boxes[:-1]
             boxes_coords = boxes_coords[:-1]
+            boxes_objects = boxes_objects[:-1]
             if len(box_corners) > 0:
                 for circle in box_corners[-1]:
                     canvas.delete(circle)
@@ -317,7 +387,11 @@ def undo_changes(*args):
                 confirmed_assocs = confirmed_assocs[:-1]
                 last_actions.append(last_action)
                 undo_changes()
-
+        
+        elif last_action == Acts.IDENT:
+            ident_box_indices = ident_box_indices[:-1]
+            last_dot = ident_dots.pop()
+            canvas.delete(last_dot)
 
 def clear_canvas(*args):
     global last_actions
@@ -325,9 +399,83 @@ def clear_canvas(*args):
         delete_boxes()
         delete_circles()
         delete_lines()  
+        delete_identities()
+
 
 #############################################################################
-### ANNOTATION MODE METHODS
+### IDENTIFICATION MODE METHODS
+#############################################################################
+
+def enter_identity_mode():
+    global boxes, boxes_objects, canvas
+    for idx, box in enumerate(boxes):
+        if boxes_objects[idx] != "body":
+            canvas.itemconfigure(box, outline="")
+
+
+def exit_identity_mode():
+    for idx, box in enumerate(boxes):
+        if boxes_objects[idx] != "body":
+            canvas.itemconfigure(box, outline=colors[boxes_objects[idx]])
+
+
+def delete_identities():
+    global ident_box_indices, ident_dots
+    for dot in ident_dots:
+        canvas.delete(dot)
+    ident_box_indices = []
+
+
+def new_identity():
+    global curr_ident_color
+    r = lambda: random.randint(0,255)
+    curr_ident_color = '#{:02x}{:02x}{:02x}'.format(r(), r(), r())
+
+def add_identity(event):
+    global boxes, boxes_coords, assoc_list, canvas, last_actions
+    global curr_ident_color, boxes_objects, ident_dots, ident_box_indices
+    x, y = event.x, event.y
+    
+    box_info = [-1, 10000000000] # idx, area
+    for i, (x1, y1, x2, y2) in enumerate(boxes_coords):
+        if boxes_objects[i] != "body":
+            continue
+        if x1 <= x and x <= x2 and y1 <= y and y <= y2:
+            area = (x2 - x1) * (y2 - y1)
+            if area < box_info[1]:
+                box_info = [i, area]
+
+    idx = box_info[0]
+    if idx != -1:
+        if curr_ident_color is None:
+            r = lambda: random.randint(0,255)
+            curr_ident_color = '#{:02x}{:02x}{:02x}'.format(r(), r(), r())
+        
+        x1, y1, x2, y2 = boxes_coords[idx]
+        xc = (x1 + x2) // 2
+        yc = (y1 + y2) // 2
+
+        found = False
+        for dot in ident_dots:
+            xl, yt, xr, yb = canvas.coords(dot)
+            if xc == (xl + xr) // 2 and yc == (yt + yb) // 2:
+                canvas.itemconfigure(dot, fill=curr_ident_color, outline=curr_ident_color)
+                found = True
+                break
+        
+        if not found:
+            ident_dots.append(
+                canvas.create_oval(
+                    xc-2*circle_r, yc-2*circle_r, xc+2*circle_r, yc+2*circle_r, 
+                    fill=curr_ident_color, outline=curr_ident_color, width=5))
+            
+            last_actions.append(Acts.IDENT)
+            ident_box_indices.append(idx)
+        
+
+
+#############################################################################
+### ASSOCIATION MODE METHODS
 #############################################################################
 
 def assoc_add(event):
@@ -479,7 +627,7 @@ def edit_continue(event):
         edit_corners()
 
 def edit_end(event):
-    global boxes, boxes_coords, canvas, editbox_idx
+    global boxes, boxes_coords, canvas, editbox_idx, click_start
 
     if editbox_idx is not None:
         x1, y1, x2, y2 = boxes_coords[editbox_idx]
@@ -497,15 +645,17 @@ def edit_end(event):
 #############################################################################
 
 def create_box(event):
-    global boxes, canvas, click_start, active_obj
+    global boxes, canvas, click_start, active_obj, boxes_objects
     click_start = [event.x, event.y]
-    # r = lambda: random.randint(0,255)
-    # color = '#{:02x}{:02x}{:02x}'.format(r(), r(), r())
+
     if active_obj is not None:
         boxes.append(
-            canvas.create_rectangle(event.x, event.y, event.x+1, event.y+1, 
-            outline=colors[active_obj], fill="", width=3)
+            canvas.create_rectangle(
+                event.x, event.y, event.x+1, event.y+1, 
+                outline=colors[active_obj], fill="", width=3)
         )
+        boxes_objects.append(active_obj)
+
 
 def delete_boxes():
     global boxes, boxes_coords, canvas
@@ -513,6 +663,7 @@ def delete_boxes():
         canvas.delete(box)
     boxes = []
     boxes_coords = []
+    boxes_objects = []
 
 
 def edit_box(event):
