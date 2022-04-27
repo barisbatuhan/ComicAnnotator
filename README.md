@@ -64,12 +64,15 @@ box_id2,text2
 
 ## Screenshot
 
+- General View of the Application
+
 ![Screenshot](assets/screenshot.png)
+
+- View During the Text Transcription Mode
 
 ![Text Transcript Screenshot](assets/text_screenshot.png)
 
 ## TODO
 
 - Add gaze direction labeling
-- Add speech bubble transcription labeling
 - Embed a detector model to help with the box annotation
