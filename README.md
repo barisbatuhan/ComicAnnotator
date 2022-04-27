@@ -46,6 +46,11 @@ index4,index5,...
 index1,index2,index3,...
 index4,index5,...
 ...
+
+### TEXTS
+box_id1,text1
+box_id2,text2
+...
 ```
 
 ## Usage
@@ -60,6 +65,8 @@ index4,index5,...
 ## Screenshot
 
 ![Screenshot](assets/screenshot.png)
+
+![Text Transcript Screenshot](assets/text_screenshot.png)
 
 ## TODO
 

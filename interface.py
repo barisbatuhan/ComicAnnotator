@@ -7,6 +7,7 @@ import PIL
 from PIL import Image, ImageTk
 
 from tkinter import *
+from tkinter.scrolledtext import ScrolledText
 
 class States(Enum):
     BOX   = 1
@@ -14,7 +15,8 @@ class States(Enum):
     CLASS = 3
     EDIT  = 4
     IDENT = 10 
-    OCR   = 11 # TO DO
+    OCR   = 11
+    OCR_ACTIVE = 13
     GAZE  = 12 # TO DO
     TL_RESIZE_EDIT = 5
     TR_RESIZE_EDIT = 6
@@ -33,6 +35,8 @@ def get_state_lbl():
         return "Mode: EDIT BOXES"
     elif state == States.IDENT:
         return "Mode: MATCH BODIES"
+    elif state == States.OCR or state == States.OCR_ACTIVE:
+        return "Mode: TEXT TRANSCRIPT"
 
 
 class Acts(Enum):
@@ -62,9 +66,13 @@ curr_ident_color   = None
 ident_dots         = []
 ident_box_indices  = []
 
+ocr_boxes          = []
+ocr_box_ids        = []
+ocr_last_box       = -1
+
 last_actions       = [Acts.INIT]
 
-inst_end_val       = 0.20
+inst_end_val       = 0.27
 bar_end_line       = 550
 
 # GLOBAL OBJECTS
@@ -79,10 +87,6 @@ canvas = Canvas(
     root, width=scr_w, height=scr_h, bd=0, highlightthickness=0, bg="white")
 canvas.pack()
 
-def _create_circle(self, x, y, r, **kwargs):
-    return self.create_oval(x-r, y-r, x+r, y+r, **kwargs)
-canvas.create_circle = _create_circle
-
 exit_btn = Button(
         root, text="X", font=("Courier", 14), width=2, 
         fg="white", bg= "red", command=root.destroy)
@@ -91,6 +95,7 @@ exit_btn.place(relx=0.99, rely=0.01, anchor="ne")
 
 # Global Scene Objects
 username     = StringVar()
+bubble_txt   = StringVar()
 ratio        = None
 
 welcome = {
@@ -117,6 +122,19 @@ annotation = {
     "vert_separator": None,
 }
 
+ocr_input = {
+    "container": None,
+    "entry": None,
+    "confirm_btn": None,
+    "txt_content": None
+}
+
+finish = {
+    "container": None
+}
+
+scenes = [welcome, annotation, ocr_input, finish]
+
 colors = {
     "face": "green",
     "body": "blue",
@@ -125,12 +143,6 @@ colors = {
     "tail": "pink",
     "narrative": "purple",
 }
-
-finish = {
-    "container": None
-}
-
-scenes = [welcome, annotation, finish]
 
 # def create_rectangle(x1, y1, x2, y2, **kwargs):
 #     if 'alpha' in kwargs:
@@ -225,7 +237,13 @@ def pass_current_image():
 def set_next_image(*args):
     global files_list, state, confirmed_assocs, assoc_list, click_start
     global ident_box_indices, ident_dots, img_sizes, scr_w, scr_h
+    global ocr_last_box
     
+    if state == States.IDENT:
+        exit_identity_mode()
+    elif state == States.OCR or state == States.OCR_ACTIVE:
+        exit_text_mode()
+
     if len(assoc_list) > 0:
         confirmed_assocs.append(assoc_list)
         assoc_list = []
@@ -277,6 +295,11 @@ def set_next_image(*args):
             txt = "".join([str(idx) + "," for idx in colors_dict[k]])
             f.write(txt[:-1] + "\n")
 
+        f.write("\n### TEXTS\n")
+        for bidx, txt in zip(ocr_box_ids, ocr_boxes):
+            f.write(f"{bidx},{txt}")
+
+
     if len(files_list) < 1:
         finish_screen()
     else:
@@ -291,8 +314,13 @@ def set_next_image(*args):
 def set_state(event):
     global state, assoc_list, annotation
 
+    if state == States.OCR_ACTIVE:
+        return 0
+
     if state == States.IDENT and event.char not in ["i", "I", "N", "n"]:
         exit_identity_mode()
+    elif state == States.OCR and event.char not in ["t", "T"]:
+        exit_text_mode()
 
     if event.char in ['b', 'B']:
         state = States.BOX
@@ -334,8 +362,15 @@ def set_state(event):
         canvas.unbind("<B1-Motion>")
         canvas.unbind("<ButtonRelease-1>")
     
-    else:
-        print(f"[WARNING] Wrong key is pressed for the state: {event.char}!")
+    elif event.char in ["t", "T"]:
+        enter_text_mode()
+        state = States.OCR
+        canvas.bind("<ButtonPress-1>", on_bubble_click)
+        canvas.unbind("<B1-Motion>")
+        canvas.unbind("<ButtonRelease-1>")
+    
+    # else:
+    #     print(f"[WARNING] Wrong key is pressed for the state: {event.char}!")
     
     if state != States.EDIT:
         delete_circles()
@@ -352,6 +387,7 @@ def undo_changes(*args):
 
     global last_actions, boxes, box_corners, boxes_coords, assoc_list
     global assoc_lines, confirmed_assocs, boxes_objects, ident_box_indices, ident_dots
+    global ocr_boxes, ocr_box_ids
 
     if len(last_actions) > 0:
         last_action = last_actions.pop()
@@ -361,6 +397,16 @@ def undo_changes(*args):
             last_actions.append(last_action)
         
         elif last_action == Acts.BOX and len(boxes) > 0:
+            latest_box = len(boxes) - 1
+
+            ocr_id = 0
+            while ocr_id < len(ocr_boxes):
+                if ocr_box_ids[ocr_id] != latest_box:
+                    ocr_id += 1
+                else:
+                    ocr_box_ids = ocr_box_ids[:ocr_id] + ocr_box_ids[ocr_id+1:]
+                    ocr_boxes = ocr_boxes[:ocr_id] + ocr_boxes[ocr_id+1:]
+
             canvas.delete(boxes[-1])
             boxes = boxes[:-1]
             boxes_coords = boxes_coords[:-1]
@@ -399,6 +445,89 @@ def clear_canvas(*args):
         delete_circles()
         delete_lines()  
         delete_identities()
+        delete_texts()
+
+
+#############################################################################
+### OCR TEXT MODE METHODS
+#############################################################################
+
+def enter_text_mode():
+    global boxes, boxes_objects, canvas
+    for idx, box in enumerate(boxes):
+        if boxes_objects[idx] not in ["bubble", "narrative"]:
+            canvas.itemconfigure(box, outline="")
+
+
+def exit_text_mode():
+    global ocr_last_box
+    for idx, box in enumerate(boxes):
+        if boxes_objects[idx] not in ["bubble", "narrative"]:
+            canvas.itemconfigure(box, outline=colors[boxes_objects[idx]])
+    ocr_last_box = -1
+
+def delete_texts():
+    global ocr_box_ids, ocr_boxes, ocr_last_box
+    ocr_boxes = []
+    ocr_box_ids = []
+    ocr_last_box = -1
+
+def on_bubble_click(event):
+    global ocr_input, bubble_txt, boxes_coords, boxes_objects, canvas, ocr_last_box
+    global state
+
+    x, y = event.x, event.y
+    
+    box_info = [-1, 10000000000] # idx, area
+    for i, (x1, y1, x2, y2) in enumerate(boxes_coords):
+        if boxes_objects[i] not in ["bubble", "narrative"]:
+            continue
+        if x1 <= x and x <= x2 and y1 <= y and y <= y2:
+            area = (x2 - x1) * (y2 - y1)
+            if area < box_info[1]:
+                box_info = [i, area]
+    
+    idx = box_info[0]
+    if idx != -1:
+        state = States.OCR_ACTIVE
+        ocr_input["container"] = Label(canvas, text="")
+        ocr_input["container"].config(bg="#b8e5eb", padx=250, pady=100)
+        ocr_input["container"].place(relx=0.01, rely=0.99, anchor="sw")
+
+        ocr_input["entry"] = Label(ocr_input["container"], text="Enter the transcript:")
+        ocr_input["entry"].config(bg="#b8e5eb", font=("Courier", 16, "bold"))
+        ocr_input["entry"].place(relx=0.5, rely=0.15, anchor="center")
+
+        ocr_input["confirm_btn"] = Button(
+            ocr_input["container"], text="CONFIRM", font=("Courier", 12), width=15, 
+            fg="#121111", bg="#E4E4E0", command=on_confirm_click)
+
+        ocr_input["confirm_btn"].place(relx=0.5, rely=0.88, anchor="center")
+
+        ocr_input["txt_content"] = Text(
+            ocr_input["container"],
+            width=42, height=6, font=("Courier", 12))
+        ocr_input["txt_content"].place(relx=0.5, rely=0.5, anchor="center")
+    
+        # TO DO: get also id of the box to global
+        ocr_last_box = idx
+        
+
+def on_confirm_click():
+    global ocr_input, ocr_boxes, ocr_box_ids, ocr_last_box, state
+    txt = ocr_input["txt_content"].get("1.0",'end')
+    
+    state = States.OCR
+
+    if len(txt) > 0:
+        ocr_boxes.append(txt)
+        ocr_box_ids.append(ocr_last_box)
+        ocr_last_box = -1
+    
+    for k in ocr_input.keys():
+        if ocr_input[k] is not None and hasattr(ocr_input[k], 'destroy'):
+            ocr_input[k].destroy()
+        ocr_input[k] = None
 
 
 #############################################################################
@@ -656,7 +785,7 @@ def create_box(event):
 
 
 def delete_boxes():
-    global boxes, boxes_coords, canvas
+    global boxes, boxes_coords, canvas, boxes_objects
     for box in boxes:
         canvas.delete(box)
     boxes = []
@@ -676,7 +805,6 @@ def change_box_color(typ):
         annotation[active_obj + "_btn"].config(font=("Courier", 14))
     active_obj = typ
     annotation[active_obj + "_btn"].config(font=("Courier", 14, "bold", "underline"))
-
 
 
 def finish_box(event):
@@ -716,15 +844,15 @@ def annot_screen():
 * E --> box edit mode
 * A --> face-body-bubble association mode
 * I --> identification through body matching
-* N --> go next association / identification""")
+* N --> go next association / identification
+* T --> OCR mode to transcript bubble text""")
     annotation["container"].config(bg="#b8e5eb", padx=10, pady=10, justify=LEFT)
-    annotation["container"].place(relx=0.01, rely=0.01, anchor="nw")
+    annotation["container"].place(relx=0.01, rely=0.06, anchor="nw")
 
-    annotation["state_lbl"] = Label(root, font=("Courier", 14, "bold"), text=get_state_lbl())
+    annotation["state_lbl"] = Label(root, font=("Courier", 14, "bold"), width=44, text=get_state_lbl())
     annotation["state_lbl"].config(bg="#b8e5eb", padx=10, pady=6, justify=LEFT)
-    annotation["state_lbl"].place(relx=0.97, rely=0.01, anchor="ne")
+    annotation["state_lbl"].place(relx=0.01, rely=0.01, anchor="nw")
 
-    print("The width of the label is:", annotation["container"].winfo_width(), "pixels.")
     annotation["vert_separator"] = canvas.create_line(bar_end_line, 0, bar_end_line, scr_h, width=5)
 
     annotation["next_btn"] = Button(
